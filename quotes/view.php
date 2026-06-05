@@ -43,6 +43,9 @@ include __DIR__ . '/../includes/header.php';
       <p class="text-muted mb-0"><?= h($quote['project_name']) ?></p>
     </div>
     <div class="d-flex gap-2 flex-wrap">
+      <a href="<?= APP_URL ?>/quotes/email.php?id=<?= $quote['id'] ?>" class="btn btn-outline-primary">
+        <i class="bi bi-envelope-arrow-up me-1"></i>Email to Client
+      </a>
       <a href="<?= APP_URL ?>/quotes/print.php?id=<?= $quote['id'] ?>" class="btn btn-outline-secondary" target="_blank">
         <i class="bi bi-printer me-1"></i>Print / PDF
       </a>

@@ -95,3 +95,15 @@ $_flash_error   = flash_get('error');
   <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
 </div>
 <?php endif; ?>
+<?php
+$_au = auth_user();
+if ($_au && isset($_au['email_verified']) && $_au['email_verified'] == 0):
+?>
+<div class="alert alert-warning alert-dismissible fade show" role="alert">
+  <i class="bi bi-envelope-exclamation-fill me-2"></i>
+  <strong>Please verify your email address.</strong>
+  Check your inbox for a verification link, or
+  <a href="<?= APP_URL ?>/resend_verify.php" class="alert-link">resend the verification email</a>.
+  <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+<?php endif; ?>

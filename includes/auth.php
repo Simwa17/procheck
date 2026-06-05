@@ -50,10 +50,11 @@ function login_user(string $email, string $password): bool {
         session_start_safe();
         session_regenerate_id(true);
         $_SESSION['user'] = [
-            'id'    => $user['id'],
-            'name'  => $user['name'],
-            'email' => $user['email'],
-            'role'  => $user['role'],
+            'id'             => $user['id'],
+            'name'           => $user['name'],
+            'email'          => $user['email'],
+            'role'           => $user['role'],
+            'email_verified' => (int)($user['email_verified'] ?? 1),
         ];
         return true;
     }
