@@ -138,3 +138,215 @@ function flash_get(string $key): ?string {
 function h(string $str): string {
     return htmlspecialchars($str, ENT_QUOTES, 'UTF-8');
 }
+
+// ── Invoice helpers ────────────────────────────────────────────────────────────
+
+function next_invoice_number(): string {
+    $prefix = setting('invoice_prefix', 'INV');
+    $year   = date('Y');
+    $stmt   = db()->prepare("SELECT COUNT(*) AS cnt FROM invoices WHERE YEAR(issued_at) = ?");
+    $stmt->execute([$year]);
+    $cnt = (int)$stmt->fetch()['cnt'] + 1;
+    return sprintf('%s-%s-%04d', $prefix, $year, $cnt);
+}
+
+function get_invoice_for_quote(int $quote_id): ?array {
+    $stmt = db()->prepare('SELECT * FROM invoices WHERE quote_id = ? LIMIT 1');
+    $stmt->execute([$quote_id]);
+    return $stmt->fetch() ?: null;
+}
+
+function get_invoice(int $invoice_id, int $user_id, bool $admin = false): ?array {
+    $sql = 'SELECT i.*, q.quote_number, q.project_name, q.client_id,
+                   c.name AS client_name, c.company AS client_company,
+                   c.email AS client_email, c.phone AS client_phone,
+                   c.address AS client_address
+            FROM invoices i
+            JOIN quotes q ON i.quote_id = q.id
+            LEFT JOIN clients c ON q.client_id = c.id
+            WHERE i.id = ?';
+    $params = [$invoice_id];
+    if (!$admin) {
+        $sql .= ' AND i.user_id = ?';
+        $params[] = $user_id;
+    }
+    $stmt = db()->prepare($sql);
+    $stmt->execute($params);
+    $inv = $stmt->fetch();
+    if (!$inv) return null;
+
+    $p = db()->prepare('SELECT * FROM payments WHERE invoice_id = ? ORDER BY payment_date');
+    $p->execute([$invoice_id]);
+    $inv['payments'] = $p->fetchAll();
+    return $inv;
+}
+
+function get_invoices(int $user_id, bool $admin = false): array {
+    $sql = 'SELECT i.*, q.quote_number, q.project_name,
+                   c.name AS client_name, c.company AS client_company
+            FROM invoices i
+            JOIN quotes q ON i.quote_id = q.id
+            LEFT JOIN clients c ON q.client_id = c.id';
+    if (!$admin) {
+        $sql .= ' WHERE i.user_id = ?';
+        $stmt = db()->prepare($sql . ' ORDER BY i.issued_at DESC');
+        $stmt->execute([$user_id]);
+    } else {
+        $stmt = db()->prepare($sql . ' ORDER BY i.issued_at DESC');
+        $stmt->execute();
+    }
+    return $stmt->fetchAll();
+}
+
+function badge_invoice_status(string $status): string {
+    $map = ['unpaid' => 'danger', 'partial' => 'warning', 'paid' => 'success'];
+    return '<span class="badge bg-' . ($map[$status] ?? 'secondary') . '">' . ucfirst($status) . '</span>';
+}
+
+// ── Quote financials ───────────────────────────────────────────────────────────
+
+/**
+ * Compute discount/tax breakdown from stored quote data.
+ * Returns amounts in MWK.
+ */
+function compute_quote_financials(array $quote): array {
+    $subtotal    = (float)$quote['subtotal_mwk'];
+    $margin_pct  = (float)$quote['margin_percent'];
+    $base        = $subtotal * (1 + $margin_pct / 100);
+
+    $disc_type   = $quote['discount_type'] ?? 'percent';
+    $disc_val    = (float)($quote['discount_value'] ?? 0);
+    $disc_amount = $disc_type === 'percent'
+                    ? $base * $disc_val / 100
+                    : min($disc_val, $base);
+    $after_disc  = max(0, $base - $disc_amount);
+
+    $tax_rate    = (float)($quote['tax_rate'] ?? 0);
+    $tax_amount  = $after_disc * $tax_rate / 100;
+    $grand_total = $after_disc + $tax_amount;
+
+    return [
+        'subtotal'        => $subtotal,
+        'margin_amount'   => $base - $subtotal,
+        'base'            => $base,
+        'discount_amount' => $disc_amount,
+        'after_discount'  => $after_disc,
+        'tax_amount'      => $tax_amount,
+        'grand_total'     => $grand_total,
+    ];
+}
+
+/**
+ * Recompute quote totals from line items + discount/tax and persist to DB.
+ */
+function recalc_quote_totals(int $quote_id): void {
+    $pdo = db();
+    $q = $pdo->prepare('SELECT margin_percent, discount_type, discount_value, tax_rate, usd_rate FROM quotes WHERE id = ?');
+    $q->execute([$quote_id]);
+    $quote = $q->fetch();
+    if (!$quote) return;
+
+    $s = $pdo->prepare('SELECT SUM(hours) AS th, SUM(total_mwk) AS sub FROM quote_items WHERE quote_id = ?');
+    $s->execute([$quote_id]);
+    $sums = $s->fetch();
+
+    $total_hours = (float)($sums['th']  ?? 0);
+    $subtotal    = (float)($sums['sub'] ?? 0);
+
+    $fin = compute_quote_financials(array_merge((array)$quote, ['subtotal_mwk' => $subtotal]));
+    $usd = (float)($quote['usd_rate'] ?: 1800);
+
+    $pdo->prepare('UPDATE quotes SET total_hours=?, subtotal_mwk=?, total_mwk=?, total_usd=? WHERE id=?')
+        ->execute([$total_hours, $subtotal, $fin['grand_total'], $fin['grand_total'] / $usd, $quote_id]);
+}
+
+// ── Quote duplication ──────────────────────────────────────────────────────────
+
+function duplicate_quote(int $quote_id, int $user_id): int {
+    $pdo = db();
+    $orig = $pdo->prepare('SELECT * FROM quotes WHERE id = ? AND user_id = ?');
+    $orig->execute([$quote_id, $user_id]);
+    $q = $orig->fetch();
+    if (!$q) return 0;
+
+    $new_number = next_quote_number();
+    $parent_rev = (int)($q['revision_number'] ?? 1);
+
+    $pdo->prepare('INSERT INTO quotes
+        (user_id, client_id, quote_number, project_name, project_type_id,
+         developer_tier, total_hours, subtotal_mwk, margin_percent, discount_type,
+         discount_value, tax_rate, total_mwk, usd_rate, total_usd, notes,
+         status, valid_until, parent_quote_id, revision_number)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    ')->execute([
+        $user_id, $q['client_id'], $new_number, $q['project_name'] . ' (Copy)',
+        $q['project_type_id'], $q['developer_tier'], $q['total_hours'],
+        $q['subtotal_mwk'], $q['margin_percent'], $q['discount_type'] ?? 'percent',
+        $q['discount_value'] ?? 0, $q['tax_rate'] ?? 0,
+        $q['total_mwk'], $q['usd_rate'], $q['total_usd'], $q['notes'],
+        'draft', $q['valid_until'], $quote_id, $parent_rev,
+    ]);
+    $new_id = (int)$pdo->lastInsertId();
+
+    // Copy items
+    $items = $pdo->prepare('SELECT * FROM quote_items WHERE quote_id = ?');
+    $items->execute([$quote_id]);
+    $ins = $pdo->prepare('INSERT INTO quote_items
+        (quote_id, item_type, module_id, module_name, description, complexity, hours, rate_mwk, total_mwk)
+        VALUES (?,?,?,?,?,?,?,?,?)');
+    foreach ($items->fetchAll() as $item) {
+        $ins->execute([
+            $new_id, $item['item_type'] ?? 'module', $item['module_id'],
+            $item['module_name'], $item['description'], $item['complexity'],
+            $item['hours'], $item['rate_mwk'], $item['total_mwk'],
+        ]);
+    }
+    return $new_id;
+}
+
+// ── Revision history ───────────────────────────────────────────────────────────
+
+function save_quote_revision(int $quote_id, int $user_id, string $note = ''): void {
+    $pdo = db();
+    $q = $pdo->prepare('SELECT * FROM quotes WHERE id = ?');
+    $q->execute([$quote_id]);
+    $quote = $q->fetch();
+    if (!$quote) return;
+
+    $items = $pdo->prepare('SELECT * FROM quote_items WHERE quote_id = ?');
+    $items->execute([$quote_id]);
+    $snapshot = ['quote' => $quote, 'items' => $items->fetchAll()];
+
+    $rev_num = (int)($quote['revision_number'] ?? 1);
+
+    $pdo->prepare('INSERT INTO quote_revisions (quote_id, revision_number, changed_by, change_note, snapshot) VALUES (?,?,?,?,?)')
+        ->execute([$quote_id, $rev_num, $user_id, $note, json_encode($snapshot)]);
+
+    $pdo->prepare('UPDATE quotes SET revision_number = revision_number + 1 WHERE id = ?')
+        ->execute([$quote_id]);
+}
+
+function get_quote_revisions(int $quote_id): array {
+    $stmt = db()->prepare(
+        'SELECT qr.*, u.name AS changed_by_name
+         FROM quote_revisions qr
+         JOIN users u ON qr.changed_by = u.id
+         WHERE qr.quote_id = ?
+         ORDER BY qr.changed_at DESC'
+    );
+    $stmt->execute([$quote_id]);
+    return $stmt->fetchAll();
+}
+
+// ── Milestones ─────────────────────────────────────────────────────────────────
+
+function get_quote_milestones(int $quote_id): array {
+    $stmt = db()->prepare('SELECT * FROM quote_milestones WHERE quote_id = ? ORDER BY sort_order, id');
+    $stmt->execute([$quote_id]);
+    return $stmt->fetchAll();
+}
+
+function badge_milestone_status(string $status): string {
+    $map = ['pending' => 'secondary', 'invoiced' => 'warning', 'paid' => 'success'];
+    return '<span class="badge bg-' . ($map[$status] ?? 'secondary') . '">' . ucfirst($status) . '</span>';
+}

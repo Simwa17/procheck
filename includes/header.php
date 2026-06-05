@@ -38,6 +38,14 @@ $_flash_error   = flash_get('error');
           <a class="nav-link <?= str_contains($_SERVER['REQUEST_URI'], 'clients') ? 'active' : '' ?>"
              href="<?= APP_URL ?>/clients/index.php"><i class="bi bi-people me-1"></i>Clients</a>
         </li>
+        <li class="nav-item">
+          <a class="nav-link <?= str_contains($_SERVER['REQUEST_URI'], 'invoices') ? 'active' : '' ?>"
+             href="<?= APP_URL ?>/invoices/index.php"><i class="bi bi-receipt me-1"></i>Invoices</a>
+        </li>
+        <li class="nav-item">
+          <a class="nav-link <?= str_contains($_SERVER['REQUEST_URI'], 'reports') ? 'active' : '' ?>"
+             href="<?= APP_URL ?>/reports/index.php"><i class="bi bi-bar-chart-line me-1"></i>Reports</a>
+        </li>
         <?php if ($_user['role'] === 'admin'): ?>
         <li class="nav-item dropdown">
           <a class="nav-link dropdown-toggle <?= str_contains($_SERVER['REQUEST_URI'], 'admin') ? 'active' : '' ?>"
@@ -68,6 +76,8 @@ $_flash_error   = flash_get('error');
           </a>
           <ul class="dropdown-menu dropdown-menu-end">
             <li><h6 class="dropdown-header"><?= h($_user['email']) ?></h6></li>
+            <li><hr class="dropdown-divider"></li>
+            <li><a class="dropdown-item" href="<?= APP_URL ?>/profile.php"><i class="bi bi-person me-2"></i>My Profile</a></li>
             <li><hr class="dropdown-divider"></li>
             <li><a class="dropdown-item text-danger" href="<?= APP_URL ?>/logout.php"><i class="bi bi-box-arrow-right me-2"></i>Logout</a></li>
           </ul>
