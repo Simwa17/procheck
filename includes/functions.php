@@ -151,51 +151,57 @@ function next_invoice_number(): string {
 }
 
 function get_invoice_for_quote(int $quote_id): ?array {
-    $stmt = db()->prepare('SELECT * FROM invoices WHERE quote_id = ? LIMIT 1');
-    $stmt->execute([$quote_id]);
-    return $stmt->fetch() ?: null;
+    try {
+        $stmt = db()->prepare('SELECT * FROM invoices WHERE quote_id = ? LIMIT 1');
+        $stmt->execute([$quote_id]);
+        return $stmt->fetch() ?: null;
+    } catch (PDOException $e) { return null; }
 }
 
 function get_invoice(int $invoice_id, int $user_id, bool $admin = false): ?array {
-    $sql = 'SELECT i.*, q.quote_number, q.project_name, q.client_id,
-                   c.name AS client_name, c.company AS client_company,
-                   c.email AS client_email, c.phone AS client_phone,
-                   c.address AS client_address
-            FROM invoices i
-            JOIN quotes q ON i.quote_id = q.id
-            LEFT JOIN clients c ON q.client_id = c.id
-            WHERE i.id = ?';
-    $params = [$invoice_id];
-    if (!$admin) {
-        $sql .= ' AND i.user_id = ?';
-        $params[] = $user_id;
-    }
-    $stmt = db()->prepare($sql);
-    $stmt->execute($params);
-    $inv = $stmt->fetch();
-    if (!$inv) return null;
+    try {
+        $sql = 'SELECT i.*, q.quote_number, q.project_name, q.client_id,
+                       c.name AS client_name, c.company AS client_company,
+                       c.email AS client_email, c.phone AS client_phone,
+                       c.address AS client_address
+                FROM invoices i
+                JOIN quotes q ON i.quote_id = q.id
+                LEFT JOIN clients c ON q.client_id = c.id
+                WHERE i.id = ?';
+        $params = [$invoice_id];
+        if (!$admin) {
+            $sql .= ' AND i.user_id = ?';
+            $params[] = $user_id;
+        }
+        $stmt = db()->prepare($sql);
+        $stmt->execute($params);
+        $inv = $stmt->fetch();
+        if (!$inv) return null;
 
-    $p = db()->prepare('SELECT * FROM payments WHERE invoice_id = ? ORDER BY payment_date');
-    $p->execute([$invoice_id]);
-    $inv['payments'] = $p->fetchAll();
-    return $inv;
+        $p = db()->prepare('SELECT * FROM payments WHERE invoice_id = ? ORDER BY payment_date');
+        $p->execute([$invoice_id]);
+        $inv['payments'] = $p->fetchAll();
+        return $inv;
+    } catch (PDOException $e) { return null; }
 }
 
 function get_invoices(int $user_id, bool $admin = false): array {
-    $sql = 'SELECT i.*, q.quote_number, q.project_name,
-                   c.name AS client_name, c.company AS client_company
-            FROM invoices i
-            JOIN quotes q ON i.quote_id = q.id
-            LEFT JOIN clients c ON q.client_id = c.id';
-    if (!$admin) {
-        $sql .= ' WHERE i.user_id = ?';
-        $stmt = db()->prepare($sql . ' ORDER BY i.issued_at DESC');
-        $stmt->execute([$user_id]);
-    } else {
-        $stmt = db()->prepare($sql . ' ORDER BY i.issued_at DESC');
-        $stmt->execute();
-    }
-    return $stmt->fetchAll();
+    try {
+        $sql = 'SELECT i.*, q.quote_number, q.project_name,
+                       c.name AS client_name, c.company AS client_company
+                FROM invoices i
+                JOIN quotes q ON i.quote_id = q.id
+                LEFT JOIN clients c ON q.client_id = c.id';
+        if (!$admin) {
+            $sql .= ' WHERE i.user_id = ?';
+            $stmt = db()->prepare($sql . ' ORDER BY i.issued_at DESC');
+            $stmt->execute([$user_id]);
+        } else {
+            $stmt = db()->prepare($sql . ' ORDER BY i.issued_at DESC');
+            $stmt->execute();
+        }
+        return $stmt->fetchAll();
+    } catch (PDOException $e) { return []; }
 }
 
 function badge_invoice_status(string $status): string {

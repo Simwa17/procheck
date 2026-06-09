@@ -35,12 +35,12 @@ $conv_rate = $conv['total'] > 0 ? round((float)$conv['accepted'] / (float)$conv[
 
 // ── Top modules ───────────────────────────────────────────────────────────────
 $top_mods_stmt = $pdo->prepare("
-    SELECT qi.module_name, qi.item_type, COUNT(*) AS cnt,
+    SELECT qi.module_name, COUNT(*) AS cnt,
            SUM(qi.total_mwk) AS total_mwk
     FROM quote_items qi
     JOIN quotes q ON qi.quote_id = q.id
     WHERE " . ($is_admin ? '1=1' : 'q.user_id = ?') . "
-    GROUP BY qi.module_name, qi.item_type
+    GROUP BY qi.module_name
     ORDER BY cnt DESC
     LIMIT 10
 ");
@@ -60,14 +60,17 @@ $by_type_stmt = $pdo->prepare("
 $by_type_stmt->execute($is_admin ? [] : [$uid]);
 $by_type = $by_type_stmt->fetchAll();
 
-// ── Invoice summary ───────────────────────────────────────────────────────────
-$inv_stmt = $pdo->prepare("
-    SELECT COUNT(*) AS cnt,
-           SUM(amount_mwk) AS billed,
-           SUM(amount_paid_mwk) AS collected
-    FROM invoices WHERE " . ($is_admin ? '1=1' : 'user_id = ?'));
-$inv_stmt->execute($is_admin ? [] : [$uid]);
-$inv_summary = $inv_stmt->fetch();
+// ── Invoice summary (table may not exist until migrate_v2 is run) ─────────────
+$inv_summary = ['cnt' => 0, 'billed' => 0, 'collected' => 0];
+try {
+    $inv_stmt = $pdo->prepare("
+        SELECT COUNT(*) AS cnt,
+               SUM(amount_mwk) AS billed,
+               SUM(amount_paid_mwk) AS collected
+        FROM invoices WHERE " . ($is_admin ? '1=1' : 'user_id = ?'));
+    $inv_stmt->execute($is_admin ? [] : [$uid]);
+    $inv_summary = $inv_stmt->fetch() ?: $inv_summary;
+} catch (PDOException $e) { /* table not yet created */ }
 
 // ── Top clients ───────────────────────────────────────────────────────────────
 $top_clients_stmt = $pdo->prepare("
@@ -213,12 +216,7 @@ include __DIR__ . '/../includes/header.php';
           <tbody>
             <?php foreach ($top_modules as $mod): ?>
             <tr>
-              <td>
-                <?= h($mod['module_name']) ?>
-                <?php if (($mod['item_type'] ?? 'module') === 'custom'): ?>
-                  <span class="badge ms-1" style="background:#e9d5ff;color:#6b21a8;font-size:9px">custom</span>
-                <?php endif; ?>
-              </td>
+              <td><?= h($mod['module_name']) ?></td>
               <td class="text-center"><?= $mod['cnt'] ?></td>
               <td class="text-end small"><?= format_mwk((float)$mod['total_mwk']) ?></td>
             </tr>
